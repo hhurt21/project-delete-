@@ -1,0 +1,830 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Rust 容量そうじ</title>
+    <style>
+      :root {
+        --bg: #f6f7f5;
+        --panel: #ffffff;
+        --text: #1b1f1d;
+        --muted: #555d59;
+        --line: #d5dad7;
+        --accent: #16785c;
+        --accent-text: #ffffff;
+        --ok: #17703f;
+        --ok-bg: #e2f3e8;
+        --bad: #b3261e;
+        --bad-bg: #fbe4e1;
+        --warn: #8a5a00;
+        --warn-bg: #fbefd6;
+        --bar: #cfe6dc;
+        --bar-inc: #16785c;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #161a18;
+          --panel: #1f2422;
+          --text: #eef2f0;
+          --muted: #aab3ae;
+          --line: #38403c;
+          --accent: #3fbf93;
+          --accent-text: #0d1512;
+          --ok: #7ee0a6;
+          --ok-bg: #1d3a29;
+          --bad: #ff9c92;
+          --bad-bg: #45211d;
+          --warn: #f2c46b;
+          --warn-bg: #3d3018;
+          --bar: #2f4a3f;
+          --bar-inc: #3fbf93;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Yu Gothic UI", "Meiryo UI", "Segoe UI", sans-serif;
+        font-size: 16px;
+        line-height: 1.55;
+      }
+      header {
+        padding: 12px 16px;
+        background: var(--panel);
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 16px;
+        align-items: center;
+      }
+      header h1 {
+        font-size: 20px;
+        margin: 0;
+      }
+      .drives {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        color: var(--muted);
+      }
+      .chip {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 2px 12px;
+        white-space: nowrap;
+      }
+      main {
+        padding: 12px 16px 48px;
+        display: grid;
+        gap: 16px;
+        max-width: 1100px;
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px 16px;
+      }
+      h2 {
+        font-size: 18px;
+        margin: 0 0 8px;
+      }
+      p {
+        margin: 6px 0;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      button {
+        font: inherit;
+        white-space: nowrap;
+        font-size: 15px;
+        padding: 7px 14px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        color: var(--text);
+        cursor: pointer;
+        min-height: 38px;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      button:focus-visible {
+        outline: 3px solid var(--accent);
+        outline-offset: 1px;
+      }
+      button.primary {
+        background: var(--accent);
+        color: var(--accent-text);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      button.danger {
+        color: var(--bad);
+        border-color: var(--bad);
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+      }
+      .roots {
+        list-style: none;
+        padding: 0;
+        margin: 8px 0;
+        display: grid;
+        gap: 6px;
+      }
+      .roots li {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 4px 4px 4px 12px;
+      }
+      .path {
+        word-break: break-all;
+      }
+      .status {
+        margin-top: 8px;
+        min-height: 1.5em;
+      }
+      .summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 24px;
+        align-items: baseline;
+        margin-bottom: 8px;
+      }
+      .big {
+        font-size: 26px;
+        font-weight: 700;
+      }
+      details.help {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 12px;
+        margin: 8px 0 12px;
+      }
+      details.help summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      details.help dt {
+        font-weight: 600;
+        margin-top: 8px;
+      }
+      details.help dd {
+        margin: 2px 0 0 0;
+      }
+      .targets {
+        display: grid;
+        gap: 10px;
+      }
+      .target {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        display: grid;
+        gap: 6px;
+      }
+      .target .head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 16px;
+        align-items: baseline;
+        justify-content: space-between;
+      }
+      .target .name {
+        font-size: 18px;
+        font-weight: 700;
+      }
+      .target .size {
+        font-size: 20px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .bar {
+        height: 10px;
+        border-radius: 5px;
+        background: var(--bar);
+        overflow: hidden;
+      }
+      .bar > div {
+        height: 100%;
+        background: var(--bar-inc);
+      }
+      .parts {
+        display: grid;
+        gap: 4px;
+      }
+      .part {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 0;
+        border-top: 1px dashed var(--line);
+      }
+      .badge {
+        display: inline-block;
+        border-radius: 6px;
+        padding: 0 8px;
+        font-size: 14px;
+        background: var(--warn-bg);
+        color: var(--warn);
+        white-space: nowrap;
+      }
+      .note {
+        border-radius: 8px;
+        padding: 8px 12px;
+        margin: 8px 0;
+      }
+      .note.ok {
+        background: var(--ok-bg);
+        color: var(--ok);
+      }
+      .note.bad {
+        background: var(--bad-bg);
+        color: var(--bad);
+      }
+      .note.warn {
+        background: var(--warn-bg);
+        color: var(--warn);
+      }
+      .cache {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 12px;
+        display: grid;
+        gap: 4px;
+        margin-top: 8px;
+      }
+      .cache .head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 16px;
+        justify-content: space-between;
+        align-items: baseline;
+      }
+      .modal-back {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.45);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+      }
+      .modal-back.show {
+        display: flex;
+      }
+      .modal {
+        background: var(--panel);
+        border-radius: 12px;
+        max-width: 560px;
+        width: 100%;
+        padding: 16px 18px;
+        border: 1px solid var(--line);
+      }
+      .modal h3 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
+      .modal .row {
+        justify-content: flex-end;
+        margin-top: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Rust 容量そうじ</h1>
+      <div class="drives" id="drives"></div>
+    </header>
+    <main>
+      <div id="message"></div>
+
+      <section>
+        <h2>1. 探す場所</h2>
+        <p class="muted">
+          この場所の中から、Rust の作業フォルダ（cargo が作る target
+          フォルダ）を探します。
+        </p>
+        <ul class="roots" id="roots"></ul>
+        <div class="row">
+          <button class="primary" id="scanBtn">探す</button>
+          <button id="addRootBtn">探す場所を足す</button>
+          <button id="resetRootsBtn">探す場所を最初に戻す</button>
+        </div>
+        <div class="status muted" id="scanStatus">
+          まだ探していません。「探す」を押してください。
+        </div>
+      </section>
+
+      <section>
+        <h2>2. Rust の作業フォルダ（target）</h2>
+        <div class="summary" id="summary"></div>
+        <div class="row" id="bulk"></div>
+        <details class="help">
+          <summary>消すとどうなる？（読むと安心です）</summary>
+          <dl>
+            <dt>途中の記録（incremental）</dt>
+            <dd>
+              自分のコードを少しだけ直したときに速くビルドするための記録です。消しても、次のビルドで自分のコードを1回だけ全部作り直すだけです（目安：数十秒〜数分）。ダウンロードした部品は作り直しません。いちばん安全に減らせます。
+            </dd>
+            <dt>debug / release を消す</dt>
+            <dd>
+              そのビルドの結果を全部消します。次のビルドで部品から全部作り直します（目安：数分〜十数分）。作った
+              exe も消えるので、残したい exe は先に別の場所へ写してください。
+            </dd>
+            <dt>全部消す</dt>
+            <dd>
+              target フォルダごと消します。「cargo
+              clean」と同じです。ソース（src や Cargo.toml）には触りません。
+            </dd>
+            <dt>消さないとき</dt>
+            <dd>
+              その中のプログラムが動いているときと、ビルド中のときは消しません。VS
+              Code の rust-analyzer
+              が使っているファイルは消せずに残ることがあります。
+            </dd>
+          </dl>
+        </details>
+        <div class="targets" id="targets"></div>
+      </section>
+
+      <section>
+        <h2>3. Cargo のダウンロード置き場</h2>
+        <p class="muted">
+          すべての Rust
+          プロジェクトで共通に使う、ダウンロードした部品の置き場です。
+        </p>
+        <div class="row">
+          <button id="cacheBtn">大きさを測る</button>
+        </div>
+        <div id="caches"></div>
+      </section>
+    </main>
+
+    <div class="modal-back" id="modalBack">
+      <div
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="modalTitle"
+      >
+        <h3 id="modalTitle"></h3>
+        <div id="modalBody"></div>
+        <div class="row" id="modalButtons"></div>
+      </div>
+    </div>
+
+    <script>
+      const { invoke } = window.__TAURI__.core;
+      const { listen } = window.__TAURI__.event;
+
+      const $ = (id) => document.getElementById(id);
+      const targets = new Map(); // path -> info
+      let scanning = false;
+      let busy = false;
+
+      function esc(s) {
+        return String(s).replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+      }
+
+      function size(b) {
+        if (b >= 1024 ** 3) return (b / 1024 ** 3).toFixed(1) + " GB";
+        if (b >= 1024 ** 2) return Math.round(b / 1024 ** 2) + " MB";
+        if (b >= 1024) return Math.round(b / 1024) + " KB";
+        return b + " バイト";
+      }
+
+      function when(ms) {
+        if (!ms) return "不明";
+        const d = new Date(ms);
+        const today = new Date();
+        const days = Math.round(
+          (new Date(today.getFullYear(), today.getMonth(), today.getDate()) - new Date(d.getFullYear(), d.getMonth(), d.getDate())) / 86400000,
+        );
+        const date = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+        if (days <= 0) return `${date}（今日）`;
+        return `${date}（${days}日前）`;
+      }
+
+      function showMessage(kind, html) {
+        $("message").innerHTML = html
+          ? `<div class="note ${kind}">${html}</div>`
+          : "";
+        if (html) window.scrollTo({ top: 0, behavior: "smooth" });
+      }
+
+      function errText(e) {
+        return esc(
+          typeof e === "string"
+            ? e
+            : e && e.message
+              ? e.message
+              : JSON.stringify(e),
+        );
+      }
+
+      // ---------- 確認の窓 ----------
+      function ask(title, bodyHtml, okLabel, danger) {
+        return new Promise((resolve) => {
+          $("modalTitle").textContent = title;
+          $("modalBody").innerHTML = bodyHtml;
+          const btns = $("modalButtons");
+          btns.innerHTML = "";
+          const cancel = document.createElement("button");
+          cancel.textContent = "やめる";
+          const ok = document.createElement("button");
+          ok.textContent = okLabel;
+          ok.className = "primary";
+          if (danger) {
+            ok.style.background = "var(--bad)";
+            ok.style.borderColor = "var(--bad)";
+          }
+          btns.append(cancel, ok);
+          const close = (v) => {
+            $("modalBack").classList.remove("show");
+            document.removeEventListener("keydown", onKey);
+            resolve(v);
+          };
+          const onKey = (e) => {
+            if (e.key === "Escape") close(false);
+          };
+          cancel.onclick = () => close(false);
+          ok.onclick = () => close(true);
+          document.addEventListener("keydown", onKey);
+          $("modalBack").classList.add("show");
+          cancel.focus();
+        });
+      }
+
+      function showWorking(title) {
+        $("modalTitle").textContent = title;
+        $("modalBody").innerHTML =
+          `<p class="big" id="workingSize">0 バイト</p><p class="muted">消し終わるまで、この窓は閉じません。</p>`;
+        $("modalButtons").innerHTML = "";
+        $("modalBack").classList.add("show");
+      }
+      function hideWorking() {
+        $("modalBack").classList.remove("show");
+      }
+      listen("clean-progress", (e) => {
+        const el = $("workingSize");
+        if (el) el.textContent = size(e.payload) + " 消しました";
+      });
+
+      function resultHtml(r, what) {
+        let freed =
+          r.disk_freed != null && r.disk_freed > 0 ? r.disk_freed : r.freed;
+        let html = `${esc(what)}：空きが <b>${size(freed)}</b> 増えました。`;
+        if (r.failed > 0) {
+          html += `<br>使用中などで消せなかったファイルが ${r.failed} 個あります（例：${esc(r.first_error || "")}）。VS Code などを閉じてから、もう一度押すと消せます。`;
+        }
+        return html;
+      }
+
+      // ---------- ドライブの空き ----------
+      async function refreshDrives() {
+        const list = await invoke("drives_free");
+        $("drives").innerHTML = list
+          .map(
+            (d) =>
+              `<span class="chip">${esc(d.drive.replace("\\", ""))} の空き ${size(d.free)}</span>`,
+          )
+          .join("");
+      }
+
+      // ---------- 探す場所 ----------
+      function renderRoots(s) {
+        $("roots").innerHTML = s.roots.length
+          ? s.roots
+              .map(
+                (r, i) =>
+                  `<li><span class="path">${esc(r)}</span><button data-root="${i}">この場所を外す</button></li>`,
+              )
+              .join("")
+          : `<li class="muted">探す場所がありません。「探す場所を足す」で選んでください。</li>`;
+        $("roots")
+          .querySelectorAll("button[data-root]")
+          .forEach((b) => {
+            b.onclick = async () =>
+              renderRoots(
+                await invoke("remove_root", { path: s.roots[+b.dataset.root] }),
+              );
+          });
+      }
+
+      $("addRootBtn").onclick = async () => {
+        try {
+          renderRoots(await invoke("add_root"));
+        } catch (e) {
+          showMessage("bad", errText(e));
+        }
+      };
+      $("resetRootsBtn").onclick = async () =>
+        renderRoots(await invoke("reset_roots"));
+
+      // ---------- 探す ----------
+      $("scanBtn").onclick = async () => {
+        if (scanning) {
+          await invoke("cancel_scan");
+          return;
+        }
+        targets.clear();
+        renderTargets();
+        showMessage("", "");
+        try {
+          await invoke("start_scan");
+          setScanning(true);
+          $("scanStatus").textContent = "探しています…";
+        } catch (e) {
+          showMessage("bad", errText(e));
+        }
+      };
+
+      function setScanning(on) {
+        scanning = on;
+        $("scanBtn").textContent = on ? "探すのをやめる" : "もう一度探す";
+        $("scanBtn").className = on ? "" : "primary";
+        $("addRootBtn").disabled = on;
+        $("resetRootsBtn").disabled = on;
+        renderTargets();
+      }
+
+      listen("scan-progress", (e) => {
+        if (!scanning) return;
+        $("scanStatus").textContent =
+          `探しています… ${e.payload.dirs.toLocaleString()} フォルダを見ました・${e.payload.found} 個見つけました`;
+      });
+      listen("scan-found", (e) => {
+        targets.set(e.payload.path, e.payload);
+        renderTargets();
+      });
+      listen("scan-done", (e) => {
+        const d = e.payload;
+        setScanning(false);
+        $("scanStatus").textContent =
+          (d.cancelled ? "途中でやめました。" : "探し終わりました。") +
+          ` ${d.dirs.toLocaleString()} フォルダを ${d.seconds.toFixed(1)} 秒で見て、${d.found} 個見つけました。`;
+      });
+
+      // ---------- 一覧 ----------
+      function renderTargets() {
+        const list = [...targets.values()].sort((a, b) => b.bytes - a.bytes);
+        const total = list.reduce((s, t) => s + t.bytes, 0);
+        const inc = list.reduce((s, t) => s + t.incremental, 0);
+        $("summary").innerHTML = list.length
+          ? `<span><span class="big">${size(total)}</span>（${list.length} 個の合計）</span><span>うち途中の記録 <b>${size(inc)}</b></span>`
+          : `<span class="muted">${scanning ? "探しています…" : "見つかったものはまだありません。"}</span>`;
+
+        $("bulk").innerHTML = "";
+        if (inc > 0 && !scanning) {
+          const b = document.createElement("button");
+          b.className = "primary";
+          b.textContent = `途中の記録を全部まとめて消す（${size(inc)}）`;
+          b.onclick = () =>
+            cleanAllIncremental(list.filter((t) => t.incremental > 0));
+          $("bulk").append(b);
+        }
+
+        $("targets").innerHTML = list
+          .map((t, i) => {
+            const pct = t.bytes
+              ? Math.round((t.incremental / t.bytes) * 100)
+              : 0;
+            const parts = t.parts
+              .map(
+                (p, j) => `<div class="part">
+                  <span><b>${esc(p.name)}</b>　${size(p.bytes)}${p.incremental ? `（うち途中の記録 ${size(p.incremental)}）` : ""}　<span class="muted">最後の更新 ${when(p.newest)}</span></span>
+                  <button data-i="${i}" data-part="${j}" ${scanning || busy ? "disabled" : ""}>${esc(p.name)} を消す（${size(p.bytes)}）</button>
+                </div>`,
+              )
+              .join("");
+            const old = t.newest && Date.now() - t.newest > 30 * 86400000;
+            return `<div class="target">
+              <div class="head">
+                <span class="name">${esc(t.name)} ${old ? `<span class="badge">30日以上ビルドしていません</span>` : ""}</span>
+                <span class="size">${size(t.bytes)}</span>
+              </div>
+              <div class="path muted">${esc(t.path)}</div>
+              <div class="muted">最後のビルド：${when(t.newest)}</div>
+              <div class="bar" title="濃い部分が途中の記録"><div style="width:${pct}%"></div></div>
+              <div class="row">
+                ${t.incremental ? `<button class="primary" data-i="${i}" data-act="incremental" ${scanning || busy ? "disabled" : ""}>途中の記録だけ消す（${size(t.incremental)}）</button>` : ""}
+                <button class="danger" data-i="${i}" data-act="all" ${scanning || busy ? "disabled" : ""}>全部消す（${size(t.bytes)}）</button>
+                <button data-i="${i}" data-act="open">フォルダを開く</button>
+              </div>
+              <div class="parts">${parts}</div>
+            </div>`;
+          })
+          .join("");
+
+        $("targets")
+          .querySelectorAll("button[data-i]")
+          .forEach((b) => {
+            const t = list[+b.dataset.i];
+            if (b.dataset.part != null) {
+              b.onclick = () =>
+                cleanTarget(t, "part", t.parts[+b.dataset.part]);
+            } else if (b.dataset.act === "open") {
+              b.onclick = () =>
+                invoke("open_folder", { path: t.path }).catch((e) =>
+                  showMessage("bad", errText(e)),
+                );
+            } else {
+              b.onclick = () => cleanTarget(t, b.dataset.act);
+            }
+          });
+      }
+
+      async function cleanTarget(t, mode, part) {
+        let title, body, amount;
+        if (mode === "incremental") {
+          amount = t.incremental;
+          title = `「${t.name}」の途中の記録を消しますか？`;
+          body = `<p>${size(amount)} 減ります。次のビルドで自分のコードを1回だけ全部作り直します（目安：数十秒〜数分）。</p>`;
+        } else if (mode === "part") {
+          amount = part.bytes;
+          title = `「${t.name}」の ${part.name} を消しますか？`;
+          body = `<p>${size(amount)} 減ります。次の ${esc(part.name)} ビルドは部品から全部作り直します（目安：数分〜十数分）。この中の exe も消えます。</p>`;
+        } else {
+          amount = t.bytes;
+          title = `「${t.name}」の作業フォルダを全部消しますか？`;
+          body = `<p>${size(amount)} 減ります。「cargo clean」と同じです。次のビルドは部品から全部作り直します（目安：数分〜十数分）。作った exe も消えます。ソースには触りません。</p>`;
+        }
+        body += `<p class="muted path">${esc(t.path)}</p>`;
+        if (
+          !(await ask(
+            title,
+            body,
+            `消す（${size(amount)}）`,
+            mode !== "incremental",
+          ))
+        )
+          return;
+        busy = true;
+        renderTargets();
+        showWorking("消しています…");
+        try {
+          const r = await invoke("clean_target", {
+            path: t.path,
+            mode,
+            part: part ? part.name : null,
+          });
+          if (r.info) targets.set(t.path, r.info);
+          else targets.delete(t.path);
+          showMessage(
+            r.result.failed ? "warn" : "ok",
+            resultHtml(r.result, t.name),
+          );
+        } catch (e) {
+          showMessage("bad", errText(e));
+        } finally {
+          busy = false;
+          hideWorking();
+          renderTargets();
+          refreshDrives();
+        }
+      }
+
+      async function cleanAllIncremental(list) {
+        const amount = list.reduce((s, t) => s + t.incremental, 0);
+        const body =
+          `<p>${list.length} 個の作業フォルダから、途中の記録を消します。合わせて ${size(amount)} 減ります。</p>` +
+          `<p>それぞれ、次のビルドで自分のコードを1回だけ全部作り直します。部品は作り直しません。</p>`;
+        if (
+          !(await ask(
+            "途中の記録を全部まとめて消しますか？",
+            body,
+            `消す（${size(amount)}）`,
+            false,
+          ))
+        )
+          return;
+        busy = true;
+        renderTargets();
+        showWorking("消しています…");
+        let freed = 0;
+        const problems = [];
+        for (const t of list) {
+          try {
+            const r = await invoke("clean_target", {
+              path: t.path,
+              mode: "incremental",
+              part: null,
+            });
+            if (r.info) targets.set(t.path, r.info);
+            freed +=
+              r.result.disk_freed != null && r.result.disk_freed > 0
+                ? r.result.disk_freed
+                : r.result.freed;
+            if (r.result.failed)
+              problems.push(
+                `${esc(t.name)}：消せなかったファイル ${r.result.failed} 個`,
+              );
+          } catch (e) {
+            problems.push(`${esc(t.name)}：${errText(e)}`);
+          }
+        }
+        busy = false;
+        hideWorking();
+        renderTargets();
+        refreshDrives();
+        showMessage(
+          problems.length ? "warn" : "ok",
+          `空きが <b>${size(freed)}</b> 増えました。` +
+            (problems.length ? "<br>" + problems.join("<br>") : ""),
+        );
+      }
+
+      // ---------- Cargo のダウンロード置き場 ----------
+      async function loadCaches() {
+        $("cacheBtn").disabled = true;
+        $("caches").innerHTML = `<p class="muted">測っています…</p>`;
+        try {
+          const list = await invoke("get_cargo_caches");
+          $("caches").innerHTML = list
+            .map(
+              (c, i) => `<div class="cache">
+                <div class="head"><b>${esc(c.title)}</b><span class="size"><b>${c.exists ? size(c.bytes) : "ありません"}</b></span></div>
+                <div class="path muted">${esc(c.path)}</div>
+                <div>${esc(c.note)}</div>
+                <div class="row">${c.exists && c.bytes > 0 ? `<button class="${c.needs_net ? "danger" : ""}" data-c="${i}">${esc(c.title)}を消す（${size(c.bytes)}）</button>` : ""}</div>
+              </div>`,
+            )
+            .join("");
+          $("caches")
+            .querySelectorAll("button[data-c]")
+            .forEach((b) => {
+              const c = list[+b.dataset.c];
+              b.onclick = () => cleanCache(c);
+            });
+          $("cacheBtn").textContent = "測り直す";
+        } catch (e) {
+          showMessage("bad", errText(e));
+        } finally {
+          $("cacheBtn").disabled = false;
+        }
+      }
+      $("cacheBtn").onclick = loadCaches;
+
+      async function cleanCache(c) {
+        const body = `<p>${size(c.bytes)} 減ります。</p><p>${esc(c.note)}</p><p class="muted path">${esc(c.path)}</p>`;
+        if (
+          !(await ask(
+            `「${c.title}」を消しますか？`,
+            body,
+            `消す（${size(c.bytes)}）`,
+            c.needs_net,
+          ))
+        )
+          return;
+        showWorking("消しています…");
+        try {
+          const r = await invoke("clean_cargo_cache", { key: c.key });
+          showMessage(r.failed ? "warn" : "ok", resultHtml(r, c.title));
+        } catch (e) {
+          showMessage("bad", errText(e));
+        } finally {
+          hideWorking();
+          refreshDrives();
+          loadCaches();
+        }
+      }
+
+      // ---------- はじめ ----------
+      (async () => {
+        renderRoots(await invoke("get_settings"));
+        renderTargets();
+        refreshDrives();
+      })();
+    </script>
+  </body>
+</html>

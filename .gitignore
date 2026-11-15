@@ -1,0 +1,7 @@
+# ビルドの出力
+src-tauri/target/
+src-tauri/gen/
+
+# その他
+*.log
+Thumbs.db
