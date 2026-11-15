@@ -27,6 +27,12 @@
         --c-node: #2b6cb0;
         --c-git: #7a4fb5;
         --c-other: #9aa39f;
+        --py: #1f5f99;
+        --py-bg: #dcebf8;
+        --js: #6b5200;
+        --js-bg: #fbf0c8;
+        --lang: #3f4744;
+        --lang-bg: #e6e9e7;
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -51,6 +57,12 @@
           --c-node: #7cb4f0;
           --c-git: #b99cf0;
           --c-other: #6b736f;
+          --py: #8cc4f5;
+          --py-bg: #1b3247;
+          --js: #f2d36b;
+          --js-bg: #3d3418;
+          --lang: #c5ccc8;
+          --lang-bg: #2e3431;
         }
       }
       * {
@@ -372,6 +384,73 @@
       .c-other {
         background: var(--c-other);
       }
+      .badge.lang-py {
+        background: var(--py-bg);
+        color: var(--py);
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .badge.lang-js {
+        background: var(--js-bg);
+        color: var(--js);
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .badge.lang-other {
+        background: var(--lang-bg);
+        color: var(--lang);
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .items {
+        display: grid;
+        gap: 8px;
+        border-top: 1px dashed var(--line);
+        padding-top: 8px;
+      }
+      .items-title {
+        font-weight: 700;
+      }
+      .item {
+        display: grid;
+        gap: 2px;
+      }
+      .item-head {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 12px;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .lv {
+        display: inline-block;
+        border-radius: 6px;
+        padding: 0 8px;
+        font-size: 14px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .lv-safe {
+        background: var(--ok-bg);
+        color: var(--ok);
+      }
+      .lv-rebuild {
+        background: var(--warn-bg);
+        color: var(--warn);
+      }
+      .lv-view {
+        background: var(--lang-bg);
+        color: var(--lang);
+      }
+      code {
+        font-family: Consolas, "BIZ UDGothic", monospace;
+        font-size: 14px;
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 4px;
+        padding: 0 4px;
+        word-break: break-all;
+      }
     </style>
   </head>
   <body>
@@ -391,6 +470,7 @@
         </div>
         <div class="status muted" id="projStatus">「測る」を押すと、フォルダごとの大きさを出します。</div>
         <div class="summary" id="projSummary"></div>
+        <div class="row" id="projBulk"></div>
         <div class="projects" id="projects"></div>
       </section>
 
@@ -830,26 +910,72 @@
         );
       }
 
-      // プロジェクトのカードのボタン
-      async function cleanProject(p, mode) {
+      // ---------- プロジェクトの片づけ ----------
+      const LEVEL = {
+        safe: ["安全", "lv-safe"],
+        rebuild: ["手間あり", "lv-rebuild"],
+        view: ["見るだけ", "lv-view"],
+      };
+      const LANG_CLASS = { Rust: "rust", Python: "lang-py", JS: "lang-js" };
+
+      function langBadges(langs) {
+        return langs.map((l) => `<span class="badge ${LANG_CLASS[l] || "lang-other"}">${esc(l)}</span>`).join(" ");
+      }
+
+      function pathList(paths) {
+        const shown = paths
+          .slice(0, 5)
+          .map((t) => `<p class="muted path">${esc(t)}</p>`)
+          .join("");
+        return shown + (paths.length > 5 ? `<p class="muted">ほか ${paths.length - 5} か所</p>` : "");
+      }
+
+      function shortPath(full, base) {
+        return full.toLowerCase().startsWith(base.toLowerCase() + "\\") ? full.slice(base.length + 1) : full;
+      }
+
+      // 片づけ候補を消す（items: 一覧の item の配列）
+      async function cleanItems(title, items, danger) {
         if (busy) return;
-        const many = p.targets.length > 1 ? `（作業フォルダ ${p.targets.length} 個の合計）` : "";
-        let title, body, amount;
-        if (mode === "incremental") {
-          amount = p.rust_incremental;
-          title = `「${p.name}」の途中の記録を消しますか？`;
-          body = `<p>${size(amount)} 減ります${many}。次のビルドで自分のコードを1回だけ全部作り直します（目安：数十秒〜数分）。部品は作り直しません。</p>`;
-        } else {
-          amount = p.rust_target;
-          title = `「${p.name}」の Rust の作業フォルダを全部消しますか？`;
-          body = `<p>${size(amount)} 減ります${many}。「cargo clean」と同じです。次のビルドは部品から全部作り直します（目安：数分〜十数分）。作った exe も消えます。ソースには触りません。</p>`;
+        const amount = items.reduce((a, it) => a + it.bytes, 0);
+        let body = `<p>${size(amount)} 減ります。</p>`;
+        const seen = new Set();
+        for (const it of items) {
+          if (seen.has(it.kind)) continue;
+          seen.add(it.kind);
+          body += `<p><b>${esc(it.title)}</b>：${esc(it.note)}</p>`;
+          if (it.restore) body += `<p>戻し方：<code>${esc(it.restore)}</code></p>`;
         }
-        body += p.targets.map((t) => `<p class="muted path">${esc(t)}</p>`).join("");
-        if (!(await ask(title, body, `消す（${size(amount)}）`, mode !== "incremental"))) return;
-        await runCleans(
-          p.targets.map((path) => ({ path, name: p.name })),
-          mode,
-        );
+        if (items.length === 1) body += pathList(items[0].paths);
+        else body += `<p class="muted">${items.reduce((a, it) => a + it.paths.length, 0)} か所を消します。</p>`;
+        if (!(await ask(title, body, `消す（${size(amount)}）`, danger))) return;
+        busy = true;
+        renderTargets();
+        showWorking("消しています…");
+        try {
+          const r = await invoke("clean_items", { paths: items.flatMap((it) => it.paths) });
+          const freed = r.result.disk_freed != null && r.result.disk_freed > 0 ? r.result.disk_freed : r.result.freed;
+          const notes = r.skipped.map(esc);
+          if (r.result.failed) {
+            notes.push(
+              `使用中などで消せなかったファイルが ${r.result.failed} 個あります（例：${esc(r.result.first_error || "")}）。VS Code などを閉じてから、もう一度押すと消せます。`,
+            );
+          }
+          showMessage(
+            notes.length ? "warn" : "ok",
+            (r.result.freed || freed > 0 ? `空きが <b>${size(freed)}</b> 増えました。` : "消しませんでした。") +
+              (notes.length ? "<br>" + notes.join("<br>") : ""),
+          );
+          // 「3. Rust の作業フォルダ」の一覧からも、消した target を外す
+          items.filter((it) => it.kind === "rust_target").forEach((it) => it.paths.forEach((t) => targets.delete(t)));
+        } catch (e) {
+          showMessage("bad", errText(e));
+        } finally {
+          busy = false;
+          hideWorking();
+          renderTargets();
+          afterChange();
+        }
       }
 
       // ---------- Cargo のダウンロード置き場 ----------
@@ -957,11 +1083,25 @@
       function renderProjects(r) {
         const list = r.projects;
         const total = list.reduce((a, p) => a + p.bytes, 0);
-        const rustT = list.reduce((a, p) => a + p.rust_target, 0);
-        const rustN = list.filter((p) => p.rust).length;
+        const safeOf = (p) => p.items.filter((it) => it.level === "safe" && it.deletable);
+        const safeAll = list.flatMap(safeOf);
+        const safeBytes = safeAll.reduce((a, it) => a + it.bytes, 0);
+        const langCount = {};
+        list.forEach((p) => p.langs.forEach((l) => (langCount[l] = (langCount[l] || 0) + 1)));
         $("projSummary").innerHTML =
           `<span><span class="big">${size(total)}</span>（${list.length} 個の合計）</span>` +
-          `<span><span class="badge rust">Rust</span> のプロジェクト ${rustN} 個・作業フォルダ <b>${size(rustT)}</b></span>`;
+          `<span>${Object.entries(langCount)
+            .sort((a, b) => b[1] - a[1])
+            .map(([l, n]) => `${langBadges([l])} ${n} 個`)
+            .join("　")}</span>`;
+        $("projBulk").innerHTML = safeBytes
+          ? `<button class="primary" id="safeAllBtn">全プロジェクトの「安全」をまとめて消す（${size(safeBytes)}）</button>`
+          : "";
+        if (safeBytes) {
+          $("safeAllBtn").onclick = () =>
+            cleanItems("全プロジェクトの「安全」をまとめて消しますか？", safeAll, false);
+        }
+
         $("projects").innerHTML = list
           .map((p, i) => {
             const cats = CATS.filter(([k]) => p[k] > 0);
@@ -971,26 +1111,56 @@
             const legend = cats
               .map(([k, c, label]) => `<span><span class="sw ${c}"></span>${label} ${size(p[k])}</span>`)
               .join("");
+            const items = p.items
+              .map((it, j) => {
+                const [lvLabel, lvClass] = LEVEL[it.level];
+                const where =
+                  it.paths.length > 1
+                    ? `<span class="muted">（${it.paths.length} か所）</span>`
+                    : `<span class="muted path">${esc(shortPath(it.paths[0], p.path))}</span>`;
+                const btn = it.deletable
+                  ? `<button class="${it.level === "safe" ? "primary" : "danger"}" data-item="${i}:${j}">${esc(it.title)}を消す（${size(it.bytes)}）</button>`
+                  : `<button data-open="${esc(it.paths[0])}">フォルダを開く</button>`;
+                return `<div class="item">
+                  <div class="item-head"><span><span class="lv ${lvClass}">${lvLabel}</span> <b>${esc(it.title)}</b> ${size(it.bytes)} ${where}</span>${btn}</div>
+                  <div class="muted">${esc(it.note)}</div>
+                  ${it.restore ? `<div class="muted">戻し方：<code>${esc(it.restore)}</code></div>` : ""}
+                </div>`;
+              })
+              .join("");
+            const safeB = safeOf(p).reduce((a, it) => a + it.bytes, 0);
             return `<div class="target project ${p.rust ? "is-rust" : ""}">
               <div class="head">
-                <span class="name">${esc(p.name)} ${p.rust ? `<span class="badge rust">Rust</span>` : ""}</span>
+                <span class="name">${esc(p.name)} ${langBadges(p.langs)}</span>
                 <span class="size">${size(p.bytes)}</span>
               </div>
               <div class="stack">${bar}</div>
               <div class="legend">${legend || `<span class="muted">空のフォルダです</span>`}</div>
+              ${items ? `<div class="items"><div class="items-title">片づけられるもの</div>${items}</div>` : ""}
               <div class="row">
                 <span class="muted">最後の更新：${when(p.newest)}</span>
-                ${p.rust_incremental ? `<button class="primary" data-pclean="${i}" data-mode="incremental">途中の記録だけ消す（${size(p.rust_incremental)}）</button>` : ""}
-                ${p.rust_target ? `<button class="danger" data-pclean="${i}" data-mode="all">Rust の作業フォルダを全部消す（${size(p.rust_target)}）</button>` : ""}
+                ${safeB ? `<button class="primary" data-safe="${i}">「安全」をまとめて消す（${size(safeB)}）</button>` : ""}
                 <button data-proj="${i}">フォルダを開く</button>
               </div>
             </div>`;
           })
           .join("");
-        $("projects").querySelectorAll("button[data-pclean]").forEach((b) => {
-          b.onclick = () => cleanProject(list[+b.dataset.pclean], b.dataset.mode);
+
+        const on = (sel, f) => $("projects").querySelectorAll(sel).forEach(f);
+        on("button[data-item]", (b) => {
+          const [i, j] = b.dataset.item.split(":").map(Number);
+          const p = list[i];
+          const it = p.items[j];
+          b.onclick = () => cleanItems(`「${p.name}」の${it.title}を消しますか？`, [it], it.level !== "safe");
         });
-        $("projects").querySelectorAll("button[data-proj]").forEach((b) => {
+        on("button[data-safe]", (b) => {
+          const p = list[+b.dataset.safe];
+          b.onclick = () => cleanItems(`「${p.name}」の「安全」をまとめて消しますか？`, safeOf(p), false);
+        });
+        on("button[data-open]", (b) => {
+          b.onclick = () => invoke("open_folder", { path: b.dataset.open }).catch((e) => showMessage("bad", errText(e)));
+        });
+        on("button[data-proj]", (b) => {
           b.onclick = () =>
             invoke("open_folder", { path: list[+b.dataset.proj].path }).catch((e) => showMessage("bad", errText(e)));
         });

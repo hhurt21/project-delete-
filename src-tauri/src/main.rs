@@ -1,12 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod fsops;
+mod kinds;
 mod procs;
 mod projects;
 mod scan;
 
+use kinds::Kind;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -141,12 +143,71 @@ async fn list_projects(shared: State<'_, Shared>) -> Result<projects::ProjectsRe
     let dir = PathBuf::from(load_settings().projects_dir);
     let reply =
         tauri::async_runtime::spawn_blocking(move || projects::list(&dir)).await.map_err(|e| e.to_string())??;
-    // ここで見つけた作業フォルダも、カードのボタンから消せるようにする
+    // ここで見つけて「消せる」と出したものだけ、カードのボタンから消せるようにする
+    let mut allowed = shared.allowed.lock().unwrap();
     let mut found = shared.found.lock().unwrap();
-    for p in reply.projects.iter().flat_map(|p| &p.targets) {
-        found.insert(key(Path::new(p)));
+    for item in reply.projects.iter().flat_map(|p| &p.items).filter(|i| i.deletable) {
+        for p in &item.paths {
+            allowed.insert(key(Path::new(p)), item.kind);
+            if item.kind == Kind::RustTarget {
+                found.insert(key(Path::new(p)));
+            }
+        }
     }
     Ok(reply)
+}
+
+#[derive(Serialize)]
+struct ItemsReply {
+    result: CleanResult,
+    /// 消さなかった場所と理由
+    skipped: Vec<String>,
+}
+
+/// 消してはいけない理由（無ければ None）。種類ごとに確かめる
+fn item_busy_reason(path: &Path, kind: Kind) -> Option<String> {
+    match kind {
+        Kind::RustTarget => busy_reason(path),
+        Kind::RustIncremental => kinds::cargo_target_above(path).and_then(busy_reason),
+        _ => running_under(path),
+    }
+}
+
+/// 一覧で「消せる」と出したものを消す
+#[tauri::command]
+async fn clean_items(app: AppHandle, shared: State<'_, Shared>, paths: Vec<String>) -> Result<ItemsReply, String> {
+    let allowed: Vec<(PathBuf, Option<Kind>)> = {
+        let a = shared.allowed.lock().unwrap();
+        paths.iter().map(|p| (PathBuf::from(p), a.get(&key(Path::new(p))).copied())).collect()
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut ok = Vec::new();
+        let mut skipped = Vec::new();
+        for (p, kind) in allowed {
+            let Some(kind) = kind else {
+                skipped.push(format!("{}：一覧で「消せる」と出したものではないので消しません", p.display()));
+                continue;
+            };
+            if !p.exists() {
+                continue;
+            }
+            // 測った後に中身が変わっていないか、もう一度見分ける
+            if kinds::classify(&p) != Some(kind) || !kinds::deletable(kind, &p) {
+                skipped.push(format!("{}：中身が変わったので消しません。「測り直す」を押してください", p.display()));
+                continue;
+            }
+            if let Some(why) = item_busy_reason(&p, kind) {
+                skipped.push(format!("{}：{why}", p.display()));
+                continue;
+            }
+            ok.push(p);
+        }
+        let drive = ok.first().cloned().unwrap_or_default();
+        let result = run_clean(&app, ok, &drive);
+        Ok(ItemsReply { result, skipped })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ---------- 探す ----------
@@ -155,6 +216,8 @@ async fn list_projects(shared: State<'_, Shared>) -> Result<projects::ProjectsRe
 struct App {
     /// 探して見つけた target（ここに無い場所は消さない）
     found: Mutex<HashSet<String>>,
+    /// プロジェクトの一覧で「消せる」と出した場所と種類
+    allowed: Mutex<HashMap<String, Kind>>,
     scanning: AtomicBool,
     cancel: AtomicBool,
 }
@@ -278,16 +341,8 @@ fn under(path: &Path, dir: &Path) -> bool {
 
 /// 消してはいけない理由（無ければ None）
 fn busy_reason(target: &Path) -> Option<String> {
-    let running: Vec<String> = procs::list()
-        .into_iter()
-        .filter(|p| p.path.as_deref().is_some_and(|x| under(x, target)))
-        .map(|p| p.name)
-        .collect();
-    if !running.is_empty() {
-        return Some(format!(
-            "この中のプログラムが動いています（{}）。閉じてからもう一度押してください",
-            running.join("、")
-        ));
+    if let Some(why) = running_under(target) {
+        return Some(why);
     }
     // ビルド中は cargo が .cargo-lock を握っている
     for dir in lock_dirs(target) {
@@ -299,6 +354,20 @@ fn busy_reason(target: &Path) -> Option<String> {
         }
     }
     None
+}
+
+/// dir の中の exe が動いていれば、その理由
+fn running_under(dir: &Path) -> Option<String> {
+    let mut running: Vec<String> = procs::list()
+        .into_iter()
+        .filter(|p| p.path.as_deref().is_some_and(|x| under(x, dir)))
+        .map(|p| p.name)
+        .collect();
+    running.sort();
+    running.dedup();
+    (!running.is_empty()).then(|| {
+        format!("この中のプログラムが動いています（{}）。閉じてからもう一度押してください", running.join("、"))
+    })
 }
 
 /// target/debug、target/release、target/<機種>/debug など
@@ -545,6 +614,7 @@ fn main() {
             open_folder,
             get_cargo_caches,
             clean_cargo_cache,
+            clean_items,
             drives_free,
         ])
         .run(tauri::generate_context!())
