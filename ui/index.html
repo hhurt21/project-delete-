@@ -105,7 +105,6 @@
         padding: 12px 16px 48px;
         display: grid;
         gap: 16px;
-        max-width: 1100px;
       }
       section {
         background: var(--panel);
@@ -450,6 +449,50 @@
         border-radius: 4px;
         padding: 0 4px;
         word-break: break-all;
+      }
+      #projects {
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 540px), 1fr));
+        align-items: start;
+      }
+      .project {
+        padding: 8px 12px;
+        gap: 4px;
+      }
+      .row.between {
+        justify-content: space-between;
+      }
+      .project.open {
+        grid-column: 1 / -1;
+      }
+      .project:not(.open) .details {
+        display: none;
+      }
+      .details {
+        display: grid;
+        gap: 6px;
+      }
+      .lv-sum {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 14px;
+        align-items: center;
+      }
+      .item-note {
+        font-size: 14px;
+      }
+      .items-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr));
+        gap: 8px;
+      }
+      .items-grid .item {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 10px;
+        align-content: start;
+      }
+      .items {
+        gap: 6px;
       }
     </style>
   </head>
@@ -1080,6 +1123,17 @@
         }
       }
 
+      // 開いているカード（測り直しても開いたままにする）
+      const openProj = new Set();
+      try {
+        JSON.parse(localStorage.getItem("openProj") || "[]").forEach((x) => openProj.add(x));
+      } catch (e) {}
+      function saveOpen() {
+        try {
+          localStorage.setItem("openProj", JSON.stringify([...openProj]));
+        } catch (e) {}
+      }
+
       function renderProjects(r) {
         const list = r.projects;
         const total = list.reduce((a, p) => a + p.bytes, 0);
@@ -1111,6 +1165,12 @@
             const legend = cats
               .map(([k, c, label]) => `<span><span class="sw ${c}"></span>${label} ${size(p[k])}</span>`)
               .join("");
+            // 段階ごとの合計（畳んだときの1行）
+            const sums = ["safe", "rebuild", "view"]
+              .map((lv) => [lv, p.items.filter((it) => it.level === lv).reduce((a, it) => a + it.bytes, 0)])
+              .filter(([, b]) => b > 0)
+              .map(([lv, b]) => `<span><span class="lv ${LEVEL[lv][1]}">${LEVEL[lv][0]}</span> ${size(b)}</span>`)
+              .join("");
             const items = p.items
               .map((it, j) => {
                 const [lvLabel, lvClass] = LEVEL[it.level];
@@ -1123,30 +1183,48 @@
                   : `<button data-open="${esc(it.paths[0])}">フォルダを開く</button>`;
                 return `<div class="item">
                   <div class="item-head"><span><span class="lv ${lvClass}">${lvLabel}</span> <b>${esc(it.title)}</b> ${size(it.bytes)} ${where}</span>${btn}</div>
-                  <div class="muted">${esc(it.note)}</div>
-                  ${it.restore ? `<div class="muted">戻し方：<code>${esc(it.restore)}</code></div>` : ""}
+                  <div class="muted item-note">${esc(it.note)}${it.restore ? `　戻し方：<code>${esc(it.restore)}</code>` : ""}</div>
                 </div>`;
               })
               .join("");
             const safeB = safeOf(p).reduce((a, it) => a + it.bytes, 0);
-            return `<div class="target project ${p.rust ? "is-rust" : ""}">
+            const open = openProj.has(p.path);
+            return `<div class="target project ${p.rust ? "is-rust" : ""} ${open ? "open" : ""}" data-path="${esc(p.path)}">
               <div class="head">
                 <span class="name">${esc(p.name)} ${langBadges(p.langs)}</span>
                 <span class="size">${size(p.bytes)}</span>
               </div>
               <div class="stack">${bar}</div>
-              <div class="legend">${legend || `<span class="muted">空のフォルダです</span>`}</div>
-              ${items ? `<div class="items"><div class="items-title">片づけられるもの</div>${items}</div>` : ""}
-              <div class="row">
-                <span class="muted">最後の更新：${when(p.newest)}</span>
-                ${safeB ? `<button class="primary" data-safe="${i}">「安全」をまとめて消す（${size(safeB)}）</button>` : ""}
-                <button data-proj="${i}">フォルダを開く</button>
+              <div class="row between">
+                ${sums ? `<div class="lv-sum">${sums}</div>` : `<span class="muted">片づけられるものはありません</span>`}
+                <div class="row">
+                  ${safeB ? `<button class="primary" data-safe="${i}">「安全」をまとめて消す（${size(safeB)}）</button>` : ""}
+                  <button data-toggle="${i}">${open ? "閉じる" : "詳しく見る"}</button>
+                  <button data-proj="${i}">フォルダを開く</button>
+                </div>
+              </div>
+              <div class="details">
+                <div class="legend">${legend || `<span class="muted">空のフォルダです</span>`}</div>
+                ${items ? `<div class="items"><div class="items-title">片づけられるもの</div><div class="items-grid">${items}</div></div>` : ""}
+                <div class="muted">最後の更新：${when(p.newest)}</div>
               </div>
             </div>`;
           })
           .join("");
 
         const on = (sel, f) => $("projects").querySelectorAll(sel).forEach(f);
+        on("button[data-toggle]", (b) => {
+          const p = list[+b.dataset.toggle];
+          b.onclick = () => {
+            const card = b.closest(".project");
+            const open = card.classList.toggle("open");
+            b.textContent = open ? "閉じる" : "詳しく見る";
+            if (open) openProj.add(p.path);
+            else openProj.delete(p.path);
+            saveOpen();
+            if (open) card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          };
+        });
         on("button[data-item]", (b) => {
           const [i, j] = b.dataset.item.split(":").map(Number);
           const p = list[i];
