@@ -21,6 +21,12 @@
         --warn-bg: #fbefd6;
         --bar: #cfe6dc;
         --bar-inc: #16785c;
+        --rust: #a8440f;
+        --rust-bg: #fbe6d9;
+        --c-rust: #d0611f;
+        --c-node: #2b6cb0;
+        --c-git: #7a4fb5;
+        --c-other: #9aa39f;
       }
       @media (prefers-color-scheme: dark) {
         :root {
@@ -39,6 +45,12 @@
           --warn-bg: #3d3018;
           --bar: #2f4a3f;
           --bar-inc: #3fbf93;
+          --rust: #ffb07c;
+          --rust-bg: #44281a;
+          --c-rust: #ff9a62;
+          --c-node: #7cb4f0;
+          --c-git: #b99cf0;
+          --c-other: #6b736f;
         }
       }
       * {
@@ -308,6 +320,58 @@
         justify-content: flex-end;
         margin-top: 14px;
       }
+      .badge.rust {
+        background: var(--rust-bg);
+        color: var(--rust);
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .projects {
+        display: grid;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .project.is-rust {
+        border-left: 6px solid var(--c-rust);
+      }
+      .stack {
+        display: flex;
+        height: 10px;
+        border-radius: 5px;
+        overflow: hidden;
+        background: var(--line);
+      }
+      .stack > span {
+        height: 100%;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 18px;
+      }
+      .legend > span {
+        white-space: nowrap;
+      }
+      .sw {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        margin-right: 6px;
+        vertical-align: -1px;
+      }
+      .c-rust {
+        background: var(--c-rust);
+      }
+      .c-node {
+        background: var(--c-node);
+      }
+      .c-git {
+        background: var(--c-git);
+      }
+      .c-other {
+        background: var(--c-other);
+      }
     </style>
   </head>
   <body>
@@ -319,7 +383,19 @@
       <div id="message"></div>
 
       <section>
-        <h2>1. 探す場所</h2>
+        <h2>1. プロジェクトの容量</h2>
+        <p class="muted">置き場：<span class="path" id="projDir"></span></p>
+        <div class="row">
+          <button class="primary" id="projBtn">測る</button>
+          <button id="projDirBtn">置き場を変える</button>
+        </div>
+        <div class="status muted" id="projStatus">「測る」を押すと、フォルダごとの大きさを出します。</div>
+        <div class="summary" id="projSummary"></div>
+        <div class="projects" id="projects"></div>
+      </section>
+
+      <section>
+        <h2>2. 探す場所</h2>
         <p class="muted">
           この場所の中から、Rust の作業フォルダ（cargo が作る target
           フォルダ）を探します。
@@ -336,7 +412,7 @@
       </section>
 
       <section>
-        <h2>2. Rust の作業フォルダ（target）</h2>
+        <h2>3. Rust の作業フォルダ（target）</h2>
         <div class="summary" id="summary"></div>
         <div class="row" id="bulk"></div>
         <details class="help">
@@ -368,7 +444,7 @@
       </section>
 
       <section>
-        <h2>3. Cargo のダウンロード置き場</h2>
+        <h2>4. Cargo のダウンロード置き場</h2>
         <p class="muted">
           すべての Rust
           プロジェクトで共通に使う、ダウンロードした部品の置き場です。
@@ -710,7 +786,7 @@
           busy = false;
           hideWorking();
           renderTargets();
-          refreshDrives();
+          afterChange();
         }
       }
 
@@ -756,7 +832,7 @@
         busy = false;
         hideWorking();
         renderTargets();
-        refreshDrives();
+        afterChange();
         showMessage(
           problems.length ? "warn" : "ok",
           `空きが <b>${size(freed)}</b> 増えました。` +
@@ -814,16 +890,103 @@
           showMessage("bad", errText(e));
         } finally {
           hideWorking();
-          refreshDrives();
+          afterChange();
           loadCaches();
         }
       }
 
+      // ---------- プロジェクトの容量 ----------
+      let projLoaded = false;
+      const CATS = [
+        ["rust_target", "c-rust", "Rust の作業フォルダ"],
+        ["node_modules", "c-node", "node_modules"],
+        ["git", "c-git", ".git（変更の記録）"],
+        ["other", "c-other", "そのほか"],
+      ];
+
+      function afterChange() {
+        refreshDrives();
+        if (projLoaded) loadProjects();
+      }
+
+      function renderProjDir(s) {
+        $("projDir").textContent = s.projects_dir;
+      }
+
+      $("projDirBtn").onclick = async () => {
+        try {
+          renderProjDir(await invoke("pick_projects_dir"));
+          loadProjects();
+        } catch (e) {
+          showMessage("bad", errText(e));
+        }
+      };
+      $("projBtn").onclick = () => loadProjects();
+
+      async function loadProjects() {
+        $("projBtn").disabled = true;
+        $("projStatus").textContent = "測っています…";
+        try {
+          const r = await invoke("list_projects");
+          projLoaded = true;
+          renderProjects(r);
+          $("projStatus").textContent =
+            `${r.projects.length} 個のフォルダを ${r.seconds.toFixed(1)} 秒で測りました。` +
+            (r.loose_bytes ? `（フォルダに入っていないファイル ${size(r.loose_bytes)} は数えていません）` : "");
+          $("projBtn").textContent = "測り直す";
+        } catch (e) {
+          $("projStatus").textContent = "";
+          showMessage("bad", errText(e));
+        } finally {
+          $("projBtn").disabled = false;
+        }
+      }
+
+      function renderProjects(r) {
+        const list = r.projects;
+        const total = list.reduce((a, p) => a + p.bytes, 0);
+        const rustT = list.reduce((a, p) => a + p.rust_target, 0);
+        const rustN = list.filter((p) => p.rust).length;
+        $("projSummary").innerHTML =
+          `<span><span class="big">${size(total)}</span>（${list.length} 個の合計）</span>` +
+          `<span><span class="badge rust">Rust</span> のプロジェクト ${rustN} 個・作業フォルダ <b>${size(rustT)}</b></span>`;
+        $("projects").innerHTML = list
+          .map((p, i) => {
+            const cats = CATS.filter(([k]) => p[k] > 0);
+            const bar = cats
+              .map(([k, c]) => `<span class="${c}" style="width:${p.bytes ? (p[k] / p.bytes) * 100 : 0}%"></span>`)
+              .join("");
+            const legend = cats
+              .map(([k, c, label]) => `<span><span class="sw ${c}"></span>${label} ${size(p[k])}</span>`)
+              .join("");
+            return `<div class="target project ${p.rust ? "is-rust" : ""}">
+              <div class="head">
+                <span class="name">${esc(p.name)} ${p.rust ? `<span class="badge rust">Rust</span>` : ""}</span>
+                <span class="size">${size(p.bytes)}</span>
+              </div>
+              <div class="stack">${bar}</div>
+              <div class="legend">${legend || `<span class="muted">空のフォルダです</span>`}</div>
+              <div class="row">
+                <span class="muted">最後の更新：${when(p.newest)}</span>
+                <button data-proj="${i}">フォルダを開く</button>
+              </div>
+            </div>`;
+          })
+          .join("");
+        $("projects").querySelectorAll("button[data-proj]").forEach((b) => {
+          b.onclick = () =>
+            invoke("open_folder", { path: list[+b.dataset.proj].path }).catch((e) => showMessage("bad", errText(e)));
+        });
+      }
+
       // ---------- はじめ ----------
       (async () => {
-        renderRoots(await invoke("get_settings"));
+        const s = await invoke("get_settings");
+        renderRoots(s);
+        renderProjDir(s);
         renderTargets();
         refreshDrives();
+        loadProjects();
       })();
     </script>
   </body>

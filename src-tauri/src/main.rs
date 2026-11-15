@@ -2,6 +2,7 @@
 
 mod fsops;
 mod procs;
+mod projects;
 mod scan;
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,18 @@ use tauri_plugin_dialog::DialogExt;
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct Settings {
     roots: Vec<String>,
+    /// プロジェクトの置き場（容量の一覧を出す場所）
+    #[serde(default = "default_projects_dir")]
+    projects_dir: String,
+}
+
+/// D:\claude があればそこ、無ければユーザーのフォルダ
+fn default_projects_dir() -> String {
+    let claude = Path::new("D:\\claude");
+    if claude.is_dir() {
+        return claude.display().to_string();
+    }
+    std::env::var_os("USERPROFILE").map(|h| PathBuf::from(h).display().to_string()).unwrap_or_default()
 }
 
 fn settings_path() -> PathBuf {
@@ -59,7 +72,7 @@ fn default_settings() -> Settings {
             roots.push(d);
         }
     }
-    Settings { roots }
+    Settings { roots, projects_dir: default_projects_dir() }
 }
 
 fn load_settings() -> Settings {
@@ -106,9 +119,27 @@ fn remove_root(path: String) -> Result<Settings, String> {
 
 #[tauri::command]
 fn reset_roots() -> Result<Settings, String> {
-    let s = default_settings();
+    let mut s = load_settings();
+    s.roots = default_settings().roots;
     save_settings(&s)?;
     Ok(s)
+}
+
+#[tauri::command]
+async fn pick_projects_dir(app: AppHandle) -> Result<Settings, String> {
+    let picked = app.dialog().file().set_title("プロジェクトの置き場を選んでください").blocking_pick_folder();
+    let mut s = load_settings();
+    if let Some(p) = picked.and_then(|f| f.into_path().ok()) {
+        s.projects_dir = p.display().to_string();
+        save_settings(&s)?;
+    }
+    Ok(s)
+}
+
+#[tauri::command]
+async fn list_projects() -> Result<projects::ProjectsReply, String> {
+    let dir = PathBuf::from(load_settings().projects_dir);
+    tauri::async_runtime::spawn_blocking(move || projects::list(&dir)).await.map_err(|e| e.to_string())?
 }
 
 // ---------- 探す ----------
@@ -500,6 +531,8 @@ fn main() {
             add_root,
             remove_root,
             reset_roots,
+            pick_projects_dir,
+            list_projects,
             start_scan,
             cancel_scan,
             clean_target,
