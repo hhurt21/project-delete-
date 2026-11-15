@@ -137,9 +137,16 @@ async fn pick_projects_dir(app: AppHandle) -> Result<Settings, String> {
 }
 
 #[tauri::command]
-async fn list_projects() -> Result<projects::ProjectsReply, String> {
+async fn list_projects(shared: State<'_, Shared>) -> Result<projects::ProjectsReply, String> {
     let dir = PathBuf::from(load_settings().projects_dir);
-    tauri::async_runtime::spawn_blocking(move || projects::list(&dir)).await.map_err(|e| e.to_string())?
+    let reply =
+        tauri::async_runtime::spawn_blocking(move || projects::list(&dir)).await.map_err(|e| e.to_string())??;
+    // ここで見つけた作業フォルダも、カードのボタンから消せるようにする
+    let mut found = shared.found.lock().unwrap();
+    for p in reply.projects.iter().flat_map(|p| &p.targets) {
+        found.insert(key(Path::new(p)));
+    }
+    Ok(reply)
 }
 
 // ---------- 探す ----------
@@ -192,7 +199,6 @@ fn start_scan(app: AppHandle, shared: State<Shared>) -> Result<(), String> {
         return Err("いま探しています。終わるまで待つか「探すのをやめる」を押してください".into());
     }
     shared.cancel.store(false, Ordering::SeqCst);
-    shared.found.lock().unwrap().clear();
     let shared = shared.inner().clone();
     let roots = outer_roots(&load_settings().roots);
     std::thread::spawn(move || {
@@ -211,13 +217,13 @@ fn start_scan(app: AppHandle, shared: State<Shared>) -> Result<(), String> {
                 }
             });
             let w = scan::Walk { cancel: &shared.cancel, seen_dirs: &seen };
+            // 探す場所が重なっても二重に出さない（found は一覧の欄からも足されるので別に持つ）
+            let seen_targets = Mutex::new(HashSet::new());
             let found = |target: PathBuf| {
-                {
-                    let mut f = shared.found.lock().unwrap();
-                    if !f.insert(key(&target)) {
-                        return;
-                    }
+                if !seen_targets.lock().unwrap().insert(key(&target)) {
+                    return;
                 }
+                shared.found.lock().unwrap().insert(key(&target));
                 count.fetch_add(1, Ordering::Relaxed);
                 let info = scan::inspect(&target);
                 let _ = app.emit("scan-found", info);

@@ -795,36 +795,27 @@
         const body =
           `<p>${list.length} 個の作業フォルダから、途中の記録を消します。合わせて ${size(amount)} 減ります。</p>` +
           `<p>それぞれ、次のビルドで自分のコードを1回だけ全部作り直します。部品は作り直しません。</p>`;
-        if (
-          !(await ask(
-            "途中の記録を全部まとめて消しますか？",
-            body,
-            `消す（${size(amount)}）`,
-            false,
-          ))
-        )
-          return;
+        if (!(await ask("途中の記録を全部まとめて消しますか？", body, `消す（${size(amount)}）`, false))) return;
+        await runCleans(
+          list.map((t) => ({ path: t.path, name: t.name })),
+          "incremental",
+        );
+      }
+
+      // 作業フォルダをいくつか続けて消す（items: {path, name}、mode: incremental / all）
+      async function runCleans(items, mode) {
         busy = true;
         renderTargets();
         showWorking("消しています…");
         let freed = 0;
         const problems = [];
-        for (const t of list) {
+        for (const t of items) {
           try {
-            const r = await invoke("clean_target", {
-              path: t.path,
-              mode: "incremental",
-              part: null,
-            });
-            if (r.info) targets.set(t.path, r.info);
-            freed +=
-              r.result.disk_freed != null && r.result.disk_freed > 0
-                ? r.result.disk_freed
-                : r.result.freed;
-            if (r.result.failed)
-              problems.push(
-                `${esc(t.name)}：消せなかったファイル ${r.result.failed} 個`,
-              );
+            const r = await invoke("clean_target", { path: t.path, mode, part: null });
+            if (!r.info) targets.delete(t.path);
+            else if (targets.has(t.path)) targets.set(t.path, r.info);
+            freed += r.result.disk_freed != null && r.result.disk_freed > 0 ? r.result.disk_freed : r.result.freed;
+            if (r.result.failed) problems.push(`${esc(t.name)}：消せなかったファイル ${r.result.failed} 個（例：${esc(r.result.first_error || "")}）`);
           } catch (e) {
             problems.push(`${esc(t.name)}：${errText(e)}`);
           }
@@ -835,8 +826,29 @@
         afterChange();
         showMessage(
           problems.length ? "warn" : "ok",
-          `空きが <b>${size(freed)}</b> 増えました。` +
-            (problems.length ? "<br>" + problems.join("<br>") : ""),
+          `空きが <b>${size(freed)}</b> 増えました。` + (problems.length ? "<br>" + problems.join("<br>") : ""),
+        );
+      }
+
+      // プロジェクトのカードのボタン
+      async function cleanProject(p, mode) {
+        if (busy) return;
+        const many = p.targets.length > 1 ? `（作業フォルダ ${p.targets.length} 個の合計）` : "";
+        let title, body, amount;
+        if (mode === "incremental") {
+          amount = p.rust_incremental;
+          title = `「${p.name}」の途中の記録を消しますか？`;
+          body = `<p>${size(amount)} 減ります${many}。次のビルドで自分のコードを1回だけ全部作り直します（目安：数十秒〜数分）。部品は作り直しません。</p>`;
+        } else {
+          amount = p.rust_target;
+          title = `「${p.name}」の Rust の作業フォルダを全部消しますか？`;
+          body = `<p>${size(amount)} 減ります${many}。「cargo clean」と同じです。次のビルドは部品から全部作り直します（目安：数分〜十数分）。作った exe も消えます。ソースには触りません。</p>`;
+        }
+        body += p.targets.map((t) => `<p class="muted path">${esc(t)}</p>`).join("");
+        if (!(await ask(title, body, `消す（${size(amount)}）`, mode !== "incremental"))) return;
+        await runCleans(
+          p.targets.map((path) => ({ path, name: p.name })),
+          mode,
         );
       }
 
@@ -968,11 +980,16 @@
               <div class="legend">${legend || `<span class="muted">空のフォルダです</span>`}</div>
               <div class="row">
                 <span class="muted">最後の更新：${when(p.newest)}</span>
+                ${p.rust_incremental ? `<button class="primary" data-pclean="${i}" data-mode="incremental">途中の記録だけ消す（${size(p.rust_incremental)}）</button>` : ""}
+                ${p.rust_target ? `<button class="danger" data-pclean="${i}" data-mode="all">Rust の作業フォルダを全部消す（${size(p.rust_target)}）</button>` : ""}
                 <button data-proj="${i}">フォルダを開く</button>
               </div>
             </div>`;
           })
           .join("");
+        $("projects").querySelectorAll("button[data-pclean]").forEach((b) => {
+          b.onclick = () => cleanProject(list[+b.dataset.pclean], b.dataset.mode);
+        });
         $("projects").querySelectorAll("button[data-proj]").forEach((b) => {
           b.onclick = () =>
             invoke("open_folder", { path: list[+b.dataset.proj].path }).catch((e) => showMessage("bad", errText(e)));

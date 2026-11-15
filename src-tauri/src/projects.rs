@@ -1,15 +1,18 @@
 //! プロジェクトの置き場（例: D:\claude）の中を、フォルダごとに測る
 use crate::fsops::measure;
-use crate::scan::is_cargo_target;
+use crate::scan::{inspect, is_cargo_target};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
 
 /// 1つのプロジェクトの中身の内訳
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 struct Tally {
     rust_target: u64,
+    rust_incremental: u64,
+    /// 見つけた cargo の作業フォルダの場所
+    targets: Vec<String>,
     node_modules: u64,
     git: u64,
     other: u64,
@@ -18,15 +21,16 @@ struct Tally {
 }
 
 impl Tally {
-    fn join(self, o: Tally) -> Tally {
-        Tally {
-            rust_target: self.rust_target + o.rust_target,
-            node_modules: self.node_modules + o.node_modules,
-            git: self.git + o.git,
-            other: self.other + o.other,
-            newest: self.newest.max(o.newest),
-            has_cargo_toml: self.has_cargo_toml || o.has_cargo_toml,
-        }
+    fn join(mut self, o: Tally) -> Tally {
+        self.rust_target += o.rust_target;
+        self.rust_incremental += o.rust_incremental;
+        self.targets.extend(o.targets);
+        self.node_modules += o.node_modules;
+        self.git += o.git;
+        self.other += o.other;
+        self.newest = self.newest.max(o.newest);
+        self.has_cargo_toml |= o.has_cargo_toml;
+        self
     }
 }
 
@@ -39,8 +43,15 @@ fn tally_dir(p: &Path, name: &str) -> Tally {
         let m = measure(p);
         Tally { git: m.bytes, ..Default::default() }
     } else if is_cargo_target(p) {
-        let m = measure(p);
-        Tally { rust_target: m.bytes, newest: m.newest, has_cargo_toml: true, ..Default::default() }
+        let info = inspect(p);
+        Tally {
+            rust_target: info.bytes,
+            rust_incremental: info.incremental,
+            targets: vec![info.path],
+            newest: info.newest,
+            has_cargo_toml: true,
+            ..Default::default()
+        }
     } else {
         tally(p)
     }
@@ -87,6 +98,8 @@ pub struct Project {
     /// Cargo.toml か cargo の作業フォルダがある
     pub rust: bool,
     pub rust_target: u64,
+    pub rust_incremental: u64,
+    pub targets: Vec<String>,
     pub node_modules: u64,
     pub git: u64,
     pub other: u64,
@@ -124,6 +137,8 @@ pub fn list(dir: &Path) -> Result<ProjectsReply, String> {
                 bytes: t.rust_target + t.node_modules + t.git + t.other,
                 rust: t.has_cargo_toml,
                 rust_target: t.rust_target,
+                rust_incremental: t.rust_incremental,
+                targets: t.targets,
                 node_modules: t.node_modules,
                 git: t.git,
                 other: t.other,
